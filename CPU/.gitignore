@@ -1,0 +1,4 @@
+# Exécutables compilés
+de_sequentiel
+test_benchmarks
+*.o
