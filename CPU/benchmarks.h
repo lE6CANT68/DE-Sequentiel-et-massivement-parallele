@@ -1,10 +1,9 @@
 #ifndef BENCHMARKS_H
 #define BENCHMARKS_H
 
-// Numéro de chaque fonction benchmark
-// (mêmes numéros que SELECTED_OBJ_FUNC dans le code GPU de Lorris)
-// 1 = Rastrigin, 2 = Rosenbrock, 3 = Griewank, 4 = Sphere
-enum Fonction { RASTRIGIN = 1, ROSENBROCK = 2, GRIEWANK = 3, SPHERE = 4 };
+// Numéro de chaque fonction benchmark (aligné CPU/GPU)
+// 0 = Sphere, 1 = Rastrigin, 2 = Rosenbrock, 3 = Griewank
+enum Fonction { SPHERE = 0, RASTRIGIN = 1, ROSENBROCK = 2, GRIEWANK = 3 };
 
 // Calcule f(x) pour un point x de dimension dim
 double evaluer(int fonction, const double* x, int dim);

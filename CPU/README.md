@@ -31,7 +31,7 @@ g++ -O2 -o test_benchmarks test_benchmarks.cpp benchmarks.cpp
 ./de_sequentiel <fonction> <dim> <pop> <graine>
 ```
 
-- `fonction` : 1 = Rastrigin, 2 = Rosenbrock, 3 = Griewank, 4 = Sphere (mêmes numéros que la version GPU)
+- `fonction` : 0 = Sphere, 1 = Rastrigin, 2 = Rosenbrock, 3 = Griewank
 - `dim` : dimension du problème (10, 50, 100)
 - `pop` : taille de la population (50, 100, 500)
 - `graine` : graine aléatoire (un numéro différent par run)
@@ -39,7 +39,7 @@ g++ -O2 -o test_benchmarks test_benchmarks.cpp benchmarks.cpp
 Exemple :
 
 ```
-./de_sequentiel 4 10 50 1
+./de_sequentiel 0 10 50 1
 ```
 
 Sortie (une ligne CSV) :
@@ -62,9 +62,9 @@ Sphere,10,50,1,-450.000000,0.000000e+00,0.0189
 
 | N° | Fonction | Bornes | Minimum f(x*) en x* = 0 |
 |---|---|---|---|
+| 0 | Shifted Sphere | [-100, 100] | -450 |
 | 1 | Shifted Rastrigin | [-5, 5] | -330 |
 | 2 | Shifted Rosenbrock | [-100, 100] | 390 |
 | 3 | Shifted Griewank | [-600, 600] | -180 |
-| 4 | Shifted Sphere | [-100, 100] | -450 |
 
 Le vecteur de décalage o vaut 0 (comme dans le code fourni).

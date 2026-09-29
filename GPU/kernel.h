@@ -13,9 +13,9 @@
 */
 const int SELECTED_OBJ_FUNC = 0; // 0 = Sphere par défaut pour valider
 
-// Paramètres DE classiques
+// Paramètres DE classiques (alignés sur CPU)
 const float F_WEIGHT = 0.5f;   // Facteur de mutation
-const float CR = 0.9f;         // Taux de croisement
+const float CR = 0.3f;         // Taux de croisement (Qin et al.)
 
 // Constante PI précise
 const float phi = 3.141592653589793f;

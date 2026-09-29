@@ -15,7 +15,7 @@ int main() {
         std::vector<double> zero(dim, 0.0);      // le point (0, ..., 0)
         std::vector<double> autre(dim);          // un point au hasard
 
-        for (int f = 1; f <= 4; f++) {     // fonctions 1 à 4
+        for (int f = 0; f < 4; f++) {     // fonctions 0-3 (Sphere, Rastrigin, Rosenbrock, Griewank)
             // Test 1 : en (0,...,0), on doit trouver exactement le minimum
             double v = evaluer(f, zero.data(), dim);
             bool ok1 = fabs(v - valeurOptimum(f)) < 1e-9;

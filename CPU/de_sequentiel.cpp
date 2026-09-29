@@ -30,6 +30,11 @@ int main(int argc, char** argv) {
     int pop      = atoi(argv[3]);
     int graine   = atoi(argv[4]);
 
+    // Compatible avec interface utilisateur (accepte 1-4)
+    if (fonction >= 1 && fonction <= 4) {
+        fonction = fonction - 1;  // Convertir en 0-3 pour enum interne
+    }
+
     double bmin = borneMin(fonction);
     double bmax = borneMax(fonction);
 
