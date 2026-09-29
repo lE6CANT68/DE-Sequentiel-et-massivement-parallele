@@ -2,3 +2,4 @@
 de_sequentiel
 test_benchmarks
 *.o
+*.exe
