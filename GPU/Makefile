@@ -1,67 +1,24 @@
-# Makefile para versión GPU - CUDA
-# Compilar con: make
-# Limpiar con: make clean
+# Makefile pour GPU DE avec CUDA
 
 NVCC = nvcc
-NVCCFLAGS = -O2 -arch=sm_70
-
 CXX = g++
-CXXFLAGS = -O2 -Wall -I.
+CXXFLAGS = -O2 -std=c++11
+NVCCFLAGS = -O2 -arch=sm_50 --use_fast_math -Xcompiler "$(CXXFLAGS)"
 
-# Detect CUDA installation
-CUDA_PATH ?= /usr/local/cuda
-INCLUDE_FLAGS = -I$(CUDA_PATH)/include
-LDFLAGS = -L$(CUDA_PATH)/lib64 -lcuda -lcudart
+# Cibles
+TARGETS = de_gpu test_benchmarks
 
-# Source files
-CUDA_SOURCES = kernel.cu
-CXX_SOURCES = main.cpp kernel.cpp benchmarks.cpp
-HEADERS = kernel.h kernel.cu
+all: $(TARGETS)
 
-# Object files
-CUDA_OBJS = kernel.o
-CXX_OBJS = main.o kernel_host.o benchmarks_gpu.o
+# Compilation principale GPU
+de_gpu: main.cpp kernel.cu kernel.cpp benchmarks.cpp
+	$(NVCC) $(NVCCFLAGS) -o $@ $^
 
-# Executables
-GPU_EXE = de_gpu
-TEST_EXE = test_benchmarks_gpu
+# Test des benchmarks
+test_benchmarks: test_benchmarks.cpp benchmarks.cpp
+	$(CXX) $(CXXFLAGS) -o $@ $^
 
-# Default target
-all: $(GPU_EXE)
-
-# Main GPU DE executable
-$(GPU_EXE): $(CUDA_OBJS) $(CXX_OBJS)
-	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
-
-# CUDA kernel compilation
-kernel.o: kernel.cu kernel.h
-	$(NVCC) $(NVCCFLAGS) -c kernel.cu -o kernel.o
-
-# Host-side C++ files
-main.o: main.cpp kernel.h benchmarks.h
-	$(CXX) $(CXXFLAGS) -c main.cpp -o main.o
-
-kernel_host.o: kernel.cpp kernel.h
-	$(CXX) $(CXXFLAGS) -c kernel.cpp -o kernel_host.o
-
-benchmarks_gpu.o: benchmarks.cpp benchmarks.h
-	$(CXX) $(CXXFLAGS) -c benchmarks.cpp -o benchmarks_gpu.o
-
-# Test benchmark functions
-test_benchmarks: test_benchmarks.cpp benchmarks.cpp benchmarks.h
-	$(CXX) $(CXXFLAGS) -o test_benchmarks test_benchmarks.cpp benchmarks.cpp
-
-# Run tests
-test: test_benchmarks $(GPU_EXE)
-	./test_benchmarks
-	./$(GPU_EXE) 10 50
-
-# Clean build artifacts
 clean:
-	rm -f $(GPU_EXE) test_benchmarks $(CUDA_OBJS) $(CXX_OBJS)
+	rm -f $(TARGETS) *.o
 
-# Clean all
-distclean: clean
-	rm -f *.o *.a *.so
-
-.PHONY: all test clean distclean
+.PHONY: all clean
