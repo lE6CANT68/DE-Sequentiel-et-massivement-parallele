@@ -80,8 +80,10 @@ Tous les tests sont OK.
 
 Format :
 ```
-de_sequentiel <fonction> <dimension> <population> <seed>
+de_sequentiel <fonction> <dimension> <population> <seed> [strategie]
 ```
+
+Stratégie (optionnelle) : `0` = DE/rand/1/bin (défaut), `1` = DE/best/1/bin, `2` = DE/current-to-best/1/bin, `3` = jDE. Détails dans [CPU/README.md](CPU/README.md).
 
 Codes de fonction :
 - `0` = Shifted Sphere
@@ -94,9 +96,16 @@ Exemple : Optimiser Sphere (fonction 0) avec dimension 10, population 50, seed 1
 ./de_sequentiel 0 10 50 1
 ```
 
-Résultat (CSV) :
+Résultat (CSV, en-tête avec `./de_sequentiel --entete`) :
 ```
-Sphere,10,50,1,-450.000000,0.000000e+00,0.0234
+version,strategie,fonction,dim,pop,graine,meilleure_valeur,erreur,temps_s
+CPU,rand1,Sphere,10,50,1,-450.000000,0.000000e+00,0.012373
+```
+
+Campagne complète du sujet (4 fonctions × 3 dimensions × 3 populations × 10 runs), résultats dans `resultats/` :
+```powershell
+cd CPU
+.\run_campagne.ps1
 ```
 
 ---
@@ -247,7 +256,7 @@ nvcc -I"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.X\include" -c ker
 
 - ✅ `GPU/kernel.h` : CR corrigé (0.9 → 0.3)
 - ✅ `CPU/benchmarks.h` : Enum harmonisée (0-3)
-- ✅ `CPU/de_sequentiel.cpp` : Conversion 1-4 → 0-3
+- ✅ `CPU/de_sequentiel.cpp` : Numéros de fonction 0-3 (comme le GPU), vérification des arguments, stratégies DE, sortie CSV commune
 - ✅ `CPU/test_benchmarks.cpp` : Boucle 0-3
 - ✅ `CPU/README.md` : Documentation mise à jour
 - ✅ `GPU/Makefile` : Créé (Unix/Linux)
