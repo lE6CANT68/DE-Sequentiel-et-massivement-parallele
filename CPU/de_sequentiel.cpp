@@ -1,11 +1,6 @@
 // DE séquentiel - version de référence sur CPU
 //
 // Compilation : g++ -O2 -o de_sequentiel de_sequentiel.cpp benchmarks.cpp
-<<<<<<< HEAD
-// Utilisation : ./de_sequentiel <fonction> <dim> <pop> <graine>
-//   fonction : 0 = Sphere, 1 = Rastrigin, 2 = Rosenbrock, 3 = Griewank
-//   exemple  : ./de_sequentiel 0 10 50 1
-=======
 // Utilisation : ./de_sequentiel <fonction> <dim> <pop> <graine> [strategie]
 //   fonction  : 0 = Sphere, 1 = Rastrigin, 2 = Rosenbrock, 3 = Griewank
 //               (mêmes numéros que dans le code GPU)
@@ -14,7 +9,6 @@
 //               2 = DE/current-to-best/1/bin
 //               3 = jDE : DE/rand/1/bin avec F et CR auto-adaptatifs (Brest et al., 2006)
 //   exemple   : ./de_sequentiel 0 10 50 1
->>>>>>> 0593a1ea89122b3b7af905a0659619a7d1af5807
 //
 // Affiche une ligne CSV :
 //   version,strategie,fonction,dim,pop,graine,meilleure_valeur,erreur,temps_s
@@ -69,11 +63,6 @@ int main(int argc, char** argv) {
     int graine    = atoi(argv[4]);
     int strategie = (argc == 6) ? atoi(argv[5]) : RAND_1;
 
-<<<<<<< HEAD
-    // Vérifier que fonction est dans [0, 3]
-    if (fonction < 0 || fonction > 3) {
-        printf("Erreur : fonction doit être entre 0 et 3\n");
-=======
     if (fonction < 0 || fonction > 3) {
         fprintf(stderr, "Erreur : la fonction doit valoir 0, 1, 2 ou 3.\n");
         return 1;
@@ -88,7 +77,6 @@ int main(int argc, char** argv) {
     }
     if (strategie < 0 || strategie > 3) {
         fprintf(stderr, "Erreur : la strategie doit valoir 0, 1, 2 ou 3.\n");
->>>>>>> 0593a1ea89122b3b7af905a0659619a7d1af5807
         return 1;
     }
 
