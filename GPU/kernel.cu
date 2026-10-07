@@ -187,8 +187,8 @@ __global__ void kernelMCER(
 
     extern __shared__ double s_data[];
     double *s_trial = s_data;
-    double *s_sum   = &s_data[dim];
-    double *s_prod  = &s_data[dim + tpb];
+    double *s_sum   = &s_data[tpb];
+    double *s_prod  = &s_data[2 * tpb];
 
     __shared__ int r1, r2, r3, j_rand;
     __shared__ double old_fit;
@@ -293,8 +293,8 @@ extern "C" void cuda_de(
     size_t shmem_ie   = (size_t)2 * tpb * sizeof(double);
 
     int alloc_dim = (dim > tpb) ? dim : tpb;
-    size_t shmem_mcer = (size_t)(alloc_dim + 2 * tpb) * sizeof(double);
-
+    size_t shmem_mcer = (size_t)(3 * tpb) * sizeof(double);
+    
     double b_min = get_bound_min(func);
     double b_max = get_bound_max(func);
 
@@ -308,8 +308,11 @@ extern "C" void cuda_de(
     cudaStreamCreate(&stream_prep);
 
     cudaEvent_t event_P[2];
-    cudaEventCreate(&event_P[0]);
-    cudaEventCreate(&event_P[1]);
+    cudaEvent_t event_MCER[2];
+    for (int i = 0; i < 2; ++i) {
+        cudaEventCreate(&event_P[i]);
+        cudaEventCreate(&event_MCER[i]);
+    }
 
     int b_p = (pop + tpb_init - 1) / tpb_init;
 
@@ -325,6 +328,9 @@ extern "C" void cuda_de(
         int next_r = 1 - r_idx;
 
         if (iter + 1 < max_iter) {
+            if (iter > 0) {
+                cudaStreamWaitEvent(stream_prep, event_MCER[next_r], 0);
+            }
             kernelP<<<b_p, tpb_init, 0, stream_prep>>>(d_states_P, d_R[next_r], pop);
             cudaEventRecord(event_P[next_r], stream_prep);
         }
@@ -335,6 +341,7 @@ extern "C" void cuda_de(
             d_pop[p_read], d_pop[p_write], d_fitness, d_R[r_idx],
             d_states_MCER, d_states_scalar, pop, dim, DE_F, DE_CR, b_min, b_max, func
         );
+        cudaEventRecord(event_MCER[r_idx], stream_compute);
 
         p_read = p_write;
         r_idx = next_r;
@@ -360,8 +367,10 @@ extern "C" void cuda_de(
     }
 
     free(h_fitness);
-    cudaEventDestroy(event_P[0]);
-    cudaEventDestroy(event_P[1]);
+    for (int i = 0; i < 2; ++i) {
+        cudaEventDestroy(event_P[i]);
+        cudaEventDestroy(event_MCER[i]);
+    }
     cudaStreamDestroy(stream_compute);
     cudaStreamDestroy(stream_prep);
     cudaFree(d_pop[0]);
