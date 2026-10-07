@@ -2,9 +2,8 @@
 //
 // Compilation : g++ -O2 -o de_sequentiel de_sequentiel.cpp benchmarks.cpp
 // Utilisation : ./de_sequentiel <fonction> <dim> <pop> <graine>
-//   fonction : 1 = Rastrigin, 2 = Rosenbrock, 3 = Griewank, 4 = Sphere
-//              (mêmes numéros que dans le code GPU)
-//   exemple  : ./de_sequentiel 4 10 50 1
+//   fonction : 0 = Sphere, 1 = Rastrigin, 2 = Rosenbrock, 3 = Griewank
+//   exemple  : ./de_sequentiel 0 10 50 1
 //
 // Affiche une ligne CSV :
 //   fonction,dim,pop,graine,meilleure_valeur,erreur,temps_s
@@ -30,9 +29,10 @@ int main(int argc, char** argv) {
     int pop      = atoi(argv[3]);
     int graine   = atoi(argv[4]);
 
-    // Compatible avec interface utilisateur (accepte 1-4)
-    if (fonction >= 1 && fonction <= 4) {
-        fonction = fonction - 1;  // Convertir en 0-3 pour enum interne
+    // Vérifier que fonction est dans [0, 3]
+    if (fonction < 0 || fonction > 3) {
+        printf("Erreur : fonction doit être entre 0 et 3\n");
+        return 1;
     }
 
     double bmin = borneMin(fonction);

@@ -1,411 +1,375 @@
-#include <iostream>          // std::cout
-#include <cstdlib>          // malloc, free
-#include <ctime>            // time()
-#include <cmath>             // fonctions mathématiques
-#include <cuda_runtime.h>   // CUDA : cudaMalloc, cudaMemcpy, cudaFree...
-#include <curand_kernel.h>  // cuRAND : curandState, curand_init, curand...
-
 #include "kernel.h"
+#include <cuda_runtime.h>
+#include <curand_kernel.h>
+#include <cmath>
+#include <cstdio>
+
+#define CONST_PI 3.14159265358979323846
 
 // ============================================================================
-// 1. FONCTIONS OBJECTIF EXÉCUTÉES SUR GPU
+// 1. RÉDUCTION PARALLÈLE DE FITNESS EN MÉMOIRE PARTAGÉE
 // ============================================================================
-__device__ float dev_fitness_function(const float *x, int dim) {
-    float res = 0.0f;
-    float somme = 0.0f;
-    float produit = 1.0f;
-
-    switch (SELECTED_OBJ_FUNC) {
-        case 0: { // Shifted Sphere
-            for (int i = 0; i < dim; i++) {
-                float zi = x[i];
-                res += zi * zi;
-            }
-            res -= 450.0f;
-            break;
-        }
-
-        case 1: { // Shifted Rastrigin
-            for (int i = 0; i < dim; i++) {
-                float zi = x[i];
-                res += zi * zi
-                    - 10.0f * cosf(2.0f * phi * zi)
-                    + 10.0f;
-            }
-            res -= 330.0f;
-            break;
-        }
-
-        case 2: { // Shifted Rosenbrock
-            for (int i = 0; i < dim - 1; i++) {
-                float zi = x[i] + 1.0f;
-                float zip1 = x[i + 1] + 1.0f;
-
-                res += 100.0f * powf(zi * zi - zip1, 2.0f)
-                    + powf(zi - 1.0f, 2.0f);
-            }
-
-            res += 390.0f;
-            break;
-        }
-
-        case 3: { // Shifted Griewank
-            for (int i = 0; i < dim; i++) {
-                float zi = x[i];
-
-                somme += zi * zi / 4000.0f;
-                produit *= cosf(
-                    zi / sqrtf((float)(i + 1))
-                );
-            }
-
-            res = somme - produit + 1.0f - 180.0f;
-            break;
-        }
-    }
-
-    return res;
-}
-
-// ============================================================================
-// 2. KERNEL D'INITIALISATION cuRAND
-// ============================================================================
-__global__ void initCurandKernel(
-    curandState *states,
-    unsigned long seed,
-    int pop
+__device__ double reduce_fitness_shmem(
+    const double *trial,
+    int dim,
+    int func,
+    int block_dim,
+    double *s_sum,
+    double *s_prod
 ) {
-    int id = blockDim.x * blockIdx.x + threadIdx.x;
+    int tid = threadIdx.x;
 
-    if (id < pop) {
-        curand_init(seed, id, 0, &states[id]);
+    double term_sum = 0.0;
+    double term_prod = 1.0;
+
+    if (tid < dim) {
+        double z = trial[tid];
+        switch (func) {
+            case FUNC_SPHERE:
+                term_sum = z * z;
+                break;
+            case FUNC_RASTRIGIN:
+                term_sum = z * z - 10.0 * cos(2.0 * CONST_PI * z) + 10.0;
+                break;
+            case FUNC_ROSENBROCK:
+                if (tid < dim - 1) {
+                    double z_cur = trial[tid] + 1.0;
+                    double z_next = trial[tid + 1] + 1.0;
+                    term_sum = 100.0 * (z_cur * z_cur - z_next) * (z_cur * z_cur - z_next)
+                             + (z_cur - 1.0) * (z_cur - 1.0);
+                }
+                break;
+            case FUNC_GRIEWANK:
+                term_sum = (z * z) / 4000.0;
+                term_prod = cos(z / sqrt((double)(tid + 1)));
+                break;
+        }
+    }
+
+    s_sum[tid] = term_sum;
+    if (func == FUNC_GRIEWANK) {
+        s_prod[tid] = term_prod;
+    }
+    __syncthreads();
+
+    // Arbre binaire de réduction
+    for (int s = block_dim / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            s_sum[tid] += s_sum[tid + s];
+            if (func == FUNC_GRIEWANK) {
+                s_prod[tid] *= s_prod[tid + s];
+            }
+        }
+        __syncthreads();
+    }
+
+    // Le thread 0 écrit le score final avec le biais
+    if (tid == 0) {
+        double val = 0.0;
+        switch (func) {
+            case FUNC_SPHERE:     val = s_sum[0] - 450.0; break;
+            case FUNC_RASTRIGIN:  val = s_sum[0] - 330.0; break;
+            case FUNC_ROSENBROCK: val = s_sum[0] + 390.0; break;
+            case FUNC_GRIEWANK:   val = s_sum[0] - s_prod[0] + 1.0 - 180.0; break;
+        }
+        s_sum[0] = val;
+    }
+    __syncthreads();
+
+    return s_sum[0];
+}
+
+// ============================================================================
+// 2. INITIALISATIONS CURAND
+// ============================================================================
+__global__ void initCurandPop(
+    curandState *states_P,
+    curandState *states_scalar,
+    unsigned long seed,
+    int pop_size
+) {
+    int g_tid = blockDim.x * blockIdx.x + threadIdx.x;
+    if (g_tid < pop_size) {
+        curand_init(seed, g_tid, 0, &states_P[g_tid]);
+        curand_init(seed + 99999UL, g_tid, 0, &states_scalar[g_tid]);
+    }
+}
+
+__global__ void initCurandMCER(
+    curandState *states_MCER,
+    unsigned long seed,
+    size_t total_threads
+) {
+    size_t g_tid = (size_t)blockDim.x * blockIdx.x + threadIdx.x;
+    if (g_tid < total_threads) {
+        curand_init(seed + 1337UL, g_tid, 0, &states_MCER[g_tid]);
     }
 }
 
 // ============================================================================
-// 3. KERNEL IE (Initial Evaluation)
+// 3. KERNEL IE : INITIALISATION & ÉVALUATION
 // ============================================================================
 __global__ void kernelIE(
-    const float *pop,
-    float *fitness,
-    int pop_size,
-    int dim
+    const double *pop,
+    double *fitness,
+    int dim,
+    int func
 ) {
-    int id = blockDim.x * blockIdx.x + threadIdx.x;
+    extern __shared__ double s_mem[];
+    int tpb = blockDim.x;
+    double *s_sum = s_mem;
+    double *s_prod = &s_mem[tpb];
 
-    if (id < pop_size) {
-        fitness[id] =
-            dev_fitness_function(&pop[id * dim], dim);
+    int ind_id = blockIdx.x;
+    const double *ind_vec = &pop[ind_id * dim];
+
+    double f = reduce_fitness_shmem(ind_vec, dim, func, tpb, s_sum, s_prod);
+
+    if (threadIdx.x == 0) {
+        fitness[ind_id] = f;
     }
 }
 
 // ============================================================================
-// 4. KERNEL P
-// Sélection de trois parents différents : r1, r2, r3
+// 4. KERNEL P : SÉLECTION DES INDICES EXCLUSIFS r1, r2, r3
 // ============================================================================
 __global__ void kernelP(
-    curandState *states,
+    curandState *states_P,
     int *devR,
     int pop_size
 ) {
     int id = blockDim.x * blockIdx.x + threadIdx.x;
+    if (id >= pop_size) return;
 
-    if (id < pop_size) {
+    curandState localState = states_P[id];
+    int r1, r2, r3;
 
-        curandState localState = states[id];
+    do {
+        r1 = curand(&localState) % pop_size;
+    } while (r1 == id);
 
-        int r1, r2, r3;
+    do {
+        r2 = curand(&localState) % pop_size;
+    } while (r2 == id || r2 == r1);
 
-        do {
-            r1 = curand(&localState) % pop_size;
-        } while (r1 == id);
+    do {
+        r3 = curand(&localState) % pop_size;
+    } while (r3 == id || r3 == r1 || r3 == r2);
 
-        do {
-            r2 = curand(&localState) % pop_size;
-        } while (r2 == id || r2 == r1);
+    devR[id * 3 + 0] = r1;
+    devR[id * 3 + 1] = r2;
+    devR[id * 3 + 2] = r3;
 
-        do {
-            r3 = curand(&localState) % pop_size;
-        } while (
-            r3 == id ||
-            r3 == r1 ||
-            r3 == r2
-        );
-
-        devR[id * 3 + 0] = r1;
-        devR[id * 3 + 1] = r2;
-        devR[id * 3 + 2] = r3;
-
-        states[id] = localState;
-    }
+    states_P[id] = localState;
 }
 
 // ============================================================================
-// 5. KERNEL MCER
-// Mutation, Croisement, Évaluation, Remplacement
+// 5. KERNEL MCER : MUTATION, CROISEMENT, ÉVALUATION ET REMPLACEMENT FUSIONNÉS
 // ============================================================================
 __global__ void kernelMCER(
-    float *pop,
-    float *fitness,
+    const double *popOld,
+    double *popNew,
+    double *fitness,
     const int *devR,
-    curandState *states,
+    curandState *states_MCER,
+    curandState *states_scalar,
     int pop_size,
     int dim,
-    float F,
-    float CR,
-    float bound_min,
-    float bound_max
+    double F,
+    double CR,
+    double b_min,
+    double b_max,
+    int func
 ) {
-    int id = blockDim.x * blockIdx.x + threadIdx.x;
+    int ind_id = blockIdx.x;
+    int tid = threadIdx.x;
+    int tpb = blockDim.x;
 
-    if (id >= pop_size)
-        return;
+    extern __shared__ double s_data[];
+    double *s_trial = s_data;
+    double *s_sum   = &s_data[dim];
+    double *s_prod  = &s_data[dim + tpb];
 
-    curandState localState = states[id];
+    __shared__ int r1, r2, r3, j_rand;
+    __shared__ double old_fit;
+    __shared__ volatile bool accepted;
 
-    int r1 = devR[id * 3 + 0];
-    int r2 = devR[id * 3 + 1];
-    int r3 = devR[id * 3 + 2];
+    if (tid == 0) {
+        curandState s_state = states_scalar[ind_id];
+        r1 = devR[ind_id * 3 + 0];
+        r2 = devR[ind_id * 3 + 1];
+        r3 = devR[ind_id * 3 + 2];
+        j_rand = curand(&s_state) % dim;
+        old_fit = fitness[ind_id];
+        states_scalar[ind_id] = s_state;
+    }
+    __syncthreads();
 
-    int j_rand = curand(&localState) % dim;
+    int state_idx = ind_id * tpb + tid;
+    curandState localState = states_MCER[state_idx];
 
-    // Vecteur d'essai
-    // Dimension maximale fixée à 100 par le sujet
-    float trial[100];
+    if (tid < dim) {
+        double rand_cr = curand_uniform_double(&localState);
 
-    // ------------------------------------------------------------
-    // Mutation + Croisement
-    // ------------------------------------------------------------
-    for (int d = 0; d < dim; d++) {
-
-        float rand_cr =
-            curand_uniform(&localState);
-
-        if (rand_cr < CR || d == j_rand) {
-
-            // Mutation DE/rand/1
-            float val =
-                pop[r1 * dim + d]
-                + F * (
-                    pop[r2 * dim + d]
-                    - pop[r3 * dim + d]
-                );
-
-            // Respect des bornes
-            if (val < bound_min)
-                val = bound_min;
-
-            if (val > bound_max)
-                val = bound_max;
-
-            trial[d] = val;
-        }
-        else {
-            trial[d] = pop[id * dim + d];
+        if (rand_cr < CR || tid == j_rand) {
+            double v = popOld[r1 * dim + tid] + F * (popOld[r2 * dim + tid] - popOld[r3 * dim + tid]);
+            if (v < b_min || v > b_max) {
+                v = curand_uniform_double(&localState) * (b_max - b_min) + b_min;
+            }
+            s_trial[tid] = v;
+        } else {
+            s_trial[tid] = popOld[ind_id * dim + tid];
         }
     }
+    states_MCER[state_idx] = localState;
+    __syncthreads();
 
-    // ------------------------------------------------------------
-    // Évaluation
-    // ------------------------------------------------------------
-    float f_trial =
-        dev_fitness_function(trial, dim);
+    double f_trial = reduce_fitness_shmem(s_trial, dim, func, tpb, s_sum, s_prod);
 
-    // ------------------------------------------------------------
-    // Remplacement glouton
-    // ------------------------------------------------------------
-    if (f_trial <= fitness[id]) {
-
-        fitness[id] = f_trial;
-
-        for (int d = 0; d < dim; d++) {
-            pop[id * dim + d] = trial[d];
+    if (tid == 0) {
+        bool is_better = (f_trial <= old_fit);
+        accepted = is_better;
+        if (is_better) {
+            fitness[ind_id] = f_trial;
         }
     }
+    __syncthreads();
 
-    states[id] = localState;
+    if (tid < dim) {
+        popNew[ind_id * dim + tid] = accepted ? s_trial[tid] : popOld[ind_id * dim + tid];
+    }
 }
 
 // ============================================================================
-// 6. FONCTION DE PILOTAGE GPU
+// 6. FONCTION HÔTE DE PILOTAGE GPU (cudaDE_i)
 // ============================================================================
 extern "C" void cuda_de(
-    float *h_positions,
-    float *h_best,
+    double *h_positions,
+    double *h_best,
     int pop,
     int dim,
-    int max_iter
+    int max_iter,
+    int func,
+    unsigned long seed
 ) {
-    size_t size_pop =
-        (size_t)pop * dim * sizeof(float);
+    size_t size_pop = (size_t)pop * dim * sizeof(double);
+    size_t size_fit = (size_t)pop * sizeof(double);
+    size_t size_r   = (size_t)pop * 3 * sizeof(int);
 
-    size_t size_fitness =
-        (size_t)pop * sizeof(float);
-
-    size_t size_r =
-        (size_t)pop * 3 * sizeof(int);
-
-    float *devPop = nullptr;
-    float *devFitness = nullptr;
-
-    int *devR = nullptr;
-
-    curandState *devStates = nullptr;
-
-    // ------------------------------------------------------------
-    // Allocation mémoire GPU
-    // ------------------------------------------------------------
-    cudaMalloc(
-        (void**)&devPop,
-        size_pop
-    );
-
-    cudaMalloc(
-        (void**)&devFitness,
-        size_fitness
-    );
-
-    cudaMalloc(
-        (void**)&devR,
-        size_r
-    );
-
-    cudaMalloc(
-        (void**)&devStates,
-        pop * sizeof(curandState)
-    );
-
-    // ------------------------------------------------------------
-    // CPU → GPU
-    // ------------------------------------------------------------
-    cudaMemcpy(
-        devPop,
-        h_positions,
-        size_pop,
-        cudaMemcpyHostToDevice
-    );
-
-    int threadsPerBlock = 128;
-
-    int blocks =
-        (pop + threadsPerBlock - 1)
-        / threadsPerBlock;
-
-    // ------------------------------------------------------------
-    // Initialisation cuRAND
-    // ------------------------------------------------------------
-    initCurandKernel<<<blocks, threadsPerBlock>>>(
-        devStates,
-        (unsigned long)time(NULL),
-        pop
-    );
-
-    cudaDeviceSynchronize();
-
-    // ------------------------------------------------------------
-    // Récupération des bornes
-    // ------------------------------------------------------------
-    float b_min =
-        get_bound_min(SELECTED_OBJ_FUNC);
-
-    float b_max =
-        get_bound_max(SELECTED_OBJ_FUNC);
-
-    // ------------------------------------------------------------
-    // Évaluation initiale
-    // ------------------------------------------------------------
-    kernelIE<<<blocks, threadsPerBlock>>>(
-        devPop,
-        devFitness,
-        pop,
-        dim
-    );
-
-    cudaDeviceSynchronize();
-
-    // ------------------------------------------------------------
-    // Boucle principale Differential Evolution
-    // ------------------------------------------------------------
-    for (int iter = 0; iter < max_iter; ++iter) {
-
-        // Sélection des parents
-        kernelP<<<blocks, threadsPerBlock>>>(
-            devStates,
-            devR,
-            pop
-        );
-
-        cudaDeviceSynchronize();
-
-        // Mutation + Croisement
-        // + Évaluation + Remplacement
-        kernelMCER<<<blocks, threadsPerBlock>>>(
-            devPop,
-            devFitness,
-            devR,
-            devStates,
-            pop,
-            dim,
-            F_WEIGHT,
-            CR,
-            b_min,
-            b_max
-        );
-
-        cudaDeviceSynchronize();
+    int tpb = 32;
+    while (tpb < dim && tpb < 1024) {
+        tpb <<= 1;
     }
 
-    // ------------------------------------------------------------
-    // GPU → CPU
-    // ------------------------------------------------------------
-    float *h_fitness =
-        (float*)malloc(size_fitness);
+    size_t total_mcer_threads = (size_t)pop * tpb;
 
-    cudaMemcpy(
-        h_fitness,
-        devFitness,
-        size_fitness,
-        cudaMemcpyDeviceToHost
-    );
+    double *d_pop[2];
+    int *d_R[2];
+    double *d_fitness;
+    curandState *d_states_P;
+    curandState *d_states_MCER;
+    curandState *d_states_scalar;
 
-    cudaMemcpy(
-        h_positions,
-        devPop,
-        size_pop,
-        cudaMemcpyDeviceToHost
-    );
+    cudaMalloc((void**)&d_pop[0], size_pop);
+    cudaMalloc((void**)&d_pop[1], size_pop);
+    cudaMalloc((void**)&d_R[0], size_r);
+    cudaMalloc((void**)&d_R[1], size_r);
+    cudaMalloc((void**)&d_fitness, size_fit);
 
-    // ------------------------------------------------------------
-    // Recherche du meilleur individu
-    // ------------------------------------------------------------
+    cudaMalloc((void**)&d_states_P, pop * sizeof(curandState));
+    cudaMalloc((void**)&d_states_scalar, pop * sizeof(curandState));
+    cudaMalloc((void**)&d_states_MCER, total_mcer_threads * sizeof(curandState));
+
+    cudaMemcpy(d_pop[0], h_positions, size_pop, cudaMemcpyHostToDevice);
+
+    int tpb_init = 128;
+    int b_pop = (pop + tpb_init - 1) / tpb_init;
+    initCurandPop<<<b_pop, tpb_init>>>(d_states_P, d_states_scalar, seed, pop);
+
+    int b_mcer = (int)((total_mcer_threads + tpb_init - 1) / tpb_init);
+    initCurandMCER<<<b_mcer, tpb_init>>>(d_states_MCER, seed, total_mcer_threads);
+    cudaDeviceSynchronize();
+
+    size_t shmem_ie   = (size_t)2 * tpb * sizeof(double);
+
+    int alloc_dim = (dim > tpb) ? dim : tpb;
+    size_t shmem_mcer = (size_t)(alloc_dim + 2 * tpb) * sizeof(double);
+
+    double b_min = get_bound_min(func);
+    double b_max = get_bound_max(func);
+
+    // Évaluation initiale de la population
+    kernelIE<<<pop, tpb, shmem_ie>>>(d_pop[0], d_fitness, dim, func);
+    cudaDeviceSynchronize();
+
+    // Configuration des Streams et Events
+    cudaStream_t stream_compute, stream_prep;
+    cudaStreamCreate(&stream_compute);
+    cudaStreamCreate(&stream_prep);
+
+    cudaEvent_t event_P[2];
+    cudaEventCreate(&event_P[0]);
+    cudaEventCreate(&event_P[1]);
+
+    int b_p = (pop + tpb_init - 1) / tpb_init;
+
+    // Pré-génération pour la première itération
+    kernelP<<<b_p, tpb_init, 0, stream_prep>>>(d_states_P, d_R[0], pop);
+    cudaEventRecord(event_P[0], stream_prep);
+
+    int p_read = 0;
+    int r_idx = 0;
+
+    for (int iter = 0; iter < max_iter; ++iter) {
+        int p_write = 1 - p_read;
+        int next_r = 1 - r_idx;
+
+        if (iter + 1 < max_iter) {
+            kernelP<<<b_p, tpb_init, 0, stream_prep>>>(d_states_P, d_R[next_r], pop);
+            cudaEventRecord(event_P[next_r], stream_prep);
+        }
+
+        cudaStreamWaitEvent(stream_compute, event_P[r_idx], 0);
+
+        kernelMCER<<<pop, tpb, shmem_mcer, stream_compute>>>(
+            d_pop[p_read], d_pop[p_write], d_fitness, d_R[r_idx],
+            d_states_MCER, d_states_scalar, pop, dim, DE_F, DE_CR, b_min, b_max, func
+        );
+
+        p_read = p_write;
+        r_idx = next_r;
+    }
+
+    cudaStreamSynchronize(stream_compute);
+
+    // Récupération des résultats sur l'hôte
+    double *h_fitness = (double*)malloc(size_fit);
+    cudaMemcpy(h_fitness, d_fitness, size_fit, cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_positions, d_pop[p_read], size_pop, cudaMemcpyDeviceToHost);
+
     int best_idx = 0;
-
-    float best_val =
-        h_fitness[0];
-
-    for (int i = 1; i < pop; i++) {
-
+    double best_val = h_fitness[0];
+    for (int i = 1; i < pop; ++i) {
         if (h_fitness[i] < best_val) {
             best_val = h_fitness[i];
             best_idx = i;
         }
     }
-
-    // ------------------------------------------------------------
-    // Copie du meilleur individu
-    // ------------------------------------------------------------
-    for (int d = 0; d < dim; d++) {
-        h_best[d] =
-            h_positions[best_idx * dim + d];
+    for (int d = 0; d < dim; ++d) {
+        h_best[d] = h_positions[best_idx * dim + d];
     }
 
-    // ------------------------------------------------------------
-    // Libération mémoire
-    // ------------------------------------------------------------
     free(h_fitness);
-
-    cudaFree(devPop);
-    cudaFree(devFitness);
-    cudaFree(devR);
-    cudaFree(devStates);
+    cudaEventDestroy(event_P[0]);
+    cudaEventDestroy(event_P[1]);
+    cudaStreamDestroy(stream_compute);
+    cudaStreamDestroy(stream_prep);
+    cudaFree(d_pop[0]);
+    cudaFree(d_pop[1]);
+    cudaFree(d_R[0]);
+    cudaFree(d_R[1]);
+    cudaFree(d_fitness);
+    cudaFree(d_states_P);
+    cudaFree(d_states_MCER);
+    cudaFree(d_states_scalar);
 }
