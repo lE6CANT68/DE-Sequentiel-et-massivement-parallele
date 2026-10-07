@@ -1,74 +1,62 @@
 #include "kernel.h"
-
 #include <iostream>
 #include <vector>
 #include <cstdlib>
-#include <ctime>
+#include <chrono>
 
 int main(int argc, char** argv) {
-    // 1. Lecture des paramètres : ./program <dimension> <population>
-    if (argc < 3) {
-        std::cerr << "Usage : " << argv[0]
-                  << " <dimension> <population>" << std::endl;
+    if (argc < 5) {
+        std::cerr << "Usage : " << argv[0] << " <fonction> <dim> <pop> <graine>\n";
         return 1;
     }
 
-    int dim = std::stoi(argv[1]);
-    int pop = std::stoi(argv[2]);
+    int fonction = std::stoi(argv[1]);
+    int dim = std::stoi(argv[2]);
+    int pop = std::stoi(argv[3]);
+    unsigned long graine = std::stoul(argv[4]);
 
-    if (dim <= 0 || pop <= 0) {
-        std::cerr << "Erreur : la dimension et la population doivent "
-                  << "être positives." << std::endl;
+    if (fonction < 0 || fonction > 3 || dim <= 0 || pop <= 0) {
+        std::cerr << "Paramètres invalides.\n";
         return 1;
     }
 
-    // 2. Budget d'évaluations imposé : 10^4 * Dim
+    // Budget imposé : 10^4 * Dim évaluations au total
     int max_evaluations = 10000 * dim;
-    int max_iter = max_evaluations / pop;
+    int max_iter = (max_evaluations / pop) - 1;
 
-    std::cout << "--- Lancement DE (GPU) ---" << std::endl;
-    std::cout << "Dimension : " << dim
-              << " | Population : " << pop << std::endl;
-    std::cout << "Nombre de generations : " << max_iter
-              << " (" << max_evaluations << " evals)" << std::endl;
+    std::vector<double> h_positions(pop * dim);
+    std::vector<double> h_best(dim);
 
-    // 3. Allocation dynamique sur l'hôte (CPU)
-    std::vector<float> h_positions(pop * dim);
-    std::vector<float> h_best(dim);
-
-    // Initialisation du générateur aléatoire CPU
-    std::srand(static_cast<unsigned>(std::time(nullptr)));
-
-    float bound_min = get_bound_min(SELECTED_OBJ_FUNC);
-    float bound_max = get_bound_max(SELECTED_OBJ_FUNC);
+    std::srand(static_cast<unsigned>(graine));
+    double bound_min = get_bound_min(fonction);
+    double bound_max = get_bound_max(fonction);
 
     for (int i = 0; i < pop * dim; ++i) {
         h_positions[i] = getRandom(bound_min, bound_max);
     }
 
-    // 4. Appel du point d'entrée CUDA
-    clock_t begin = std::clock();
+    auto debut = std::chrono::high_resolution_clock::now();
 
     cuda_de(
         h_positions.data(),
         h_best.data(),
         pop,
         dim,
-        max_iter
+        max_iter,
+        fonction,
+        graine
     );
 
-    clock_t end = std::clock();
+    auto fin = std::chrono::high_resolution_clock::now();
+    double temps = std::chrono::duration<double>(fin - debut).count();
 
-    // 5. Affichage des résultats
-    double time_spent =
-        static_cast<double>(end - begin) / CLOCKS_PER_SEC;
+    double meilleur_fitness = host_fitness_function(h_best.data(), dim, fonction);
+    double optimum = get_optimum_value(fonction);
+    double erreur = meilleur_fitness - optimum;
 
-    std::cout << "Temps GPU : "
-              << time_spent << " s" << std::endl;
-
-    std::cout << "Meilleure fitness : "
-              << host_fitness_function(h_best.data(), dim)
-              << std::endl;
+    // Ligne CSV : fonction,dimension,population,graine,meilleur_fitness,erreur,temps_sec
+    printf("%s,%d,%d,%lu,%.6f,%.6e,%.4f\n",
+           nom_fonction(fonction), dim, pop, graine, meilleur_fitness, erreur, temps);
 
     return 0;
 }
